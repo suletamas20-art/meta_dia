@@ -1,57 +1,171 @@
 
+import { useEffect, useState } from 'react'
+import { getScreenBySlug } from './lib/contentful'
 import './App.css'
 
+type SceneOption = {
+  slug: string
+  title: string
+}
+
+type SceneData = {
+  title?: string
+  slug?: string
+  description?: string
+  backgroundImage?: {
+    fields?: {
+      file?: {
+        url?: string
+      }
+    }
+  }
+  music?: string
+  options?: {
+    options?: SceneOption[]
+  }
+}
+
 function App() {
+  const [slug, setSlug] = useState('0N5')
+  const [scene, setScene] = useState<SceneData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadScene() {
+      setLoading(true)
+      setError(null)
+      setScene(null)
+
+      try {
+        const result = await getScreenBySlug(slug)
+
+        if (!result) {
+          throw new Error(`Nem található jelenet ezzel a sluggal: ${slug}`)
+        }
+
+        if (!cancelled) {
+          setScene(result.fields as unknown as SceneData)
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : 'Ismeretlen hiba történt a jelenet betöltésekor.',
+          )
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false)
+        }
+      }
+    }
+
+    void loadScene()
+
+    return () => {
+      cancelled = true
+    }
+  }, [slug])
+
+  const imageUrl = scene?.backgroundImage?.fields?.file?.url
+  const backgroundUrl = imageUrl
+    ? imageUrl.startsWith('//')
+      ? `https:${imageUrl}`
+      : imageUrl
+    : undefined
+
   return (
     <main className="metadia">
       <header className="topbar">
-        <a className="brand" href="/" aria-label="Metadia kezdőlap">
+        <a
+          className="brand"
+          href="/"
+          aria-label="Metadia kezdőlap"
+          onClick={(event) => {
+            event.preventDefault()
+            setSlug('0N5')
+          }}
+        >
           <span className="brand-mark">M</span>
           <span>METADIA</span>
         </a>
+
         <span className="status">
           <span className="status-dot" />
-          Fejlesztői környezet
+          Contentful kapcsolat
         </span>
       </header>
 
-      <section className="welcome">
-        <p className="eyebrow">HYPERTEXT · MULTIMEDIA · NARRATIVE</p>
-        <h1>Metadia<span>.</span></h1>
-        <p className="intro">
-          Egy történetmotor újjáépítése.
-          <br />
-          Jelenetek, elágazások és összekapcsolódó médiatartalmak.
-        </p>
+      <section className="scene">
+        {loading && (
+          <div className="scene-message" role="status">
+            Jelenet betöltése…
+          </div>
+        )}
 
-        <div className="system-card">
-          <div className="system-card-header">
-            <span className="system-indicator" />
-            <span>RENDSZERÁLLAPOT</span>
-            <span className="version">v0.1.0</span>
+        {!loading && error && (
+          <div className="scene-message scene-error" role="alert">
+            <h1>Nem sikerült betölteni a jelenetet.</h1>
+            <p>{error}</p>
+            <button
+              className="retry-button"
+              onClick={() => setSlug((current) => current)}
+            >
+              Újrapróbálás
+            </button>
           </div>
+        )}
 
-          <div className="system-row">
-            <span>Felület</span>
-            <span className="value">React + TypeScript</span>
-          </div>
-          <div className="system-row">
-            <span>Fejlesztői szerver</span>
-            <span className="value">Vite</span>
-          </div>
-          <div className="system-row">
-            <span>Tartalomkezelés</span>
-            <span className="pending">Integrációra vár</span>
-          </div>
-          <div className="system-row">
-            <span>Történetmotor</span>
-            <span className="pending">Fejlesztés előtt</span>
-          </div>
-        </div>
+        {!loading && !error && scene && (
+          <>
+            <div
+              className="scene-background"
+              style={
+                backgroundUrl
+                  ? { backgroundImage: `url("${backgroundUrl}")` }
+                  : undefined
+              }
+            />
 
-        <p className="footer-note">
-          HELYREÁLLÍTÁS · ÚJ FEJLESZTÉSI ALAP
-        </p>
+            <div className="scene-overlay" />
+
+            <article className="scene-content">
+              <p className="eyebrow">METADIA · {scene.slug}</p>
+              <h1>{scene.title || scene.slug}</h1>
+
+              {scene.description && (
+                <p className="scene-description">{scene.description}</p>
+              )}
+
+              {scene.options?.options &&
+                scene.options.options.length > 0 && (
+                  <nav
+                    className="scene-options"
+                    aria-label="Történet folytatása"
+                  >
+                    {scene.options.options.map((option) => (
+                      <button
+                        className="scene-option"
+                        key={option.slug}
+                        onClick={() => setSlug(option.slug)}
+                      >
+                        <span>{option.title}</span>
+                        <span aria-hidden="true">↗</span>
+                      </button>
+                    ))}
+                  </nav>
+                )}
+
+              <p className="scene-footer">
+                JELENET · {scene.slug}
+              </p>
+            </article>
+          </>
+        )}
       </section>
     </main>
   )
