@@ -1,53 +1,69 @@
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type AnimationEvent } from 'react'
 import { getScreenBySlug } from './lib/contentful'
+import Screen from './components/Screen'
+import LoadingConstellation from './components/LoadingConstellation'
+import type { SceneData, ScenePhase } from './types/scene'
 import './App.css'
 
-type SceneOption = {
-  slug: string
-  title: string
+const INITIAL_SLUG = '0t'
+
+function getBackgroundUrl(scene: SceneData): string | undefined {
+  const imageUrl = scene.backgroundImage?.fields?.file?.url
+
+  if (!imageUrl) return undefined
+
+  return imageUrl.startsWith('//') ? `https:${imageUrl}` : imageUrl
 }
 
-type SceneData = {
-  title?: string
-  slug?: string
-  description?: string
-  backgroundImage?: {
-    fields?: {
-      file?: {
-        url?: string
-      }
-    }
-  }
-  music?: string
-  options?: {
-    options?: SceneOption[]
-  }
+function preloadBackground(scene: SceneData): Promise<void> {
+  const url = getBackgroundUrl(scene)
+
+  if (!url) return Promise.resolve()
+
+  return new Promise((resolve) => {
+    const image = new Image()
+    image.onload = () => resolve()
+    image.onerror = () => resolve()
+    image.src = url
+
+    if (image.complete) resolve()
+  })
 }
 
 function App() {
-  const [slug, setSlug] = useState('0N5')
   const [scene, setScene] = useState<SceneData | null>(null)
+  const [phase, setPhase] = useState<ScenePhase>('initial')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [retryKey, setRetryKey] = useState(0)
+
+  const [incomingScene, setIncomingScene] = useState<SceneData | null>(null)
+  const [loadingNext, setLoadingNext] = useState(false)
+  const [transitionError, setTransitionError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
 
-    async function loadScene() {
+    async function loadInitialScene() {
       setLoading(true)
       setError(null)
-      setScene(null)
 
       try {
-        const result = await getScreenBySlug(slug)
+        const result = await getScreenBySlug(INITIAL_SLUG)
 
         if (!result) {
-          throw new Error(`Nem található jelenet ezzel a sluggal: ${slug}`)
+          throw new Error(
+            `Nem található kezdőjelenet ezzel a sluggal: ${INITIAL_SLUG}`,
+          )
         }
 
+        const nextScene = result.fields as unknown as SceneData
+        await preloadBackground(nextScene)
+
         if (!cancelled) {
-          setScene(result.fields as unknown as SceneData)
+          setScene(nextScene)
+          setPhase('initial')
         }
       } catch (err) {
         if (!cancelled) {
@@ -58,112 +74,116 @@ function App() {
           )
         }
       } finally {
-        if (!cancelled) {
-          setLoading(false)
-        }
+        if (!cancelled) setLoading(false)
       }
     }
 
-    void loadScene()
+    void loadInitialScene()
 
     return () => {
       cancelled = true
     }
-  }, [slug])
+  }, [retryKey])
 
-  const imageUrl = scene?.backgroundImage?.fields?.file?.url
-  const backgroundUrl = imageUrl
-    ? imageUrl.startsWith('//')
-      ? `https:${imageUrl}`
-      : imageUrl
-    : undefined
+  async function handleSelectOption(nextSlug: string) {
+    if (loadingNext || incomingScene) return
+
+    setLoadingNext(true)
+    setTransitionError(null)
+
+    try {
+      const result = await getScreenBySlug(nextSlug)
+
+      if (!result) {
+        throw new Error(`Nem található jelenet ezzel a sluggal: ${nextSlug}`)
+      }
+
+      const nextScene = result.fields as unknown as SceneData
+
+      // Az új háttérkép betöltése a fade előtt.
+      await preloadBackground(nextScene)
+
+      setIncomingScene(nextScene)
+    } catch (err) {
+      setTransitionError(
+        err instanceof Error
+          ? err.message
+          : 'Nem sikerült betölteni a következő jelenetet.',
+      )
+      setLoadingNext(false)
+    }
+  }
+
+  function handleTransitionEnd(event: AnimationEvent<HTMLDivElement>) {
+    if (event.target !== event.currentTarget || !incomingScene) return
+
+    setScene(incomingScene)
+    setIncomingScene(null)
+    setPhase('initial')
+    setLoadingNext(false)
+    setTransitionError(null)
+  }
+
+  function handleRetry() {
+    setRetryKey((current) => current + 1)
+  }
 
   return (
     <main className="metadia">
-      <header className="topbar">
-        <a
-          className="brand"
-          href="/"
-          aria-label="Metadia kezdőlap"
-          onClick={(event) => {
-            event.preventDefault()
-            setSlug('0N5')
-          }}
-        >
-          <span className="brand-mark">M</span>
-          <span>METADIA</span>
-        </a>
-
-        <span className="status">
-          <span className="status-dot" />
-          Contentful kapcsolat
-        </span>
-      </header>
-
       <section className="scene">
-        {loading && (
-          <div className="scene-message" role="status">
-            Jelenet betöltése…
-          </div>
-        )}
+        {loading && <LoadingConstellation />}
 
         {!loading && error && (
           <div className="scene-message scene-error" role="alert">
             <h1>Nem sikerült betölteni a jelenetet.</h1>
             <p>{error}</p>
-            <button
-              className="retry-button"
-              onClick={() => setSlug((current) => current)}
-            >
+            <button className="retry-button" onClick={handleRetry}>
               Újrapróbálás
             </button>
           </div>
         )}
 
-        {!loading && !error && scene && (
+        {!loading && scene && (
           <>
             <div
-              className="scene-background"
-              style={
-                backgroundUrl
-                  ? { backgroundImage: `url("${backgroundUrl}")` }
-                  : undefined
-              }
-            />
+              className={`scene-layer ${
+                incomingScene
+                  ? 'scene-layer--outgoing'
+                  : 'scene-layer--current'
+              }`}
+            >
+              <Screen
+                scene={scene}
+                phase={phase}
+                onStartReading={() => setPhase('reading')}
+                onContinueReading={() => setPhase('choices')}
+                onSelectOption={handleSelectOption}
+              />
+            </div>
 
-            <div className="scene-overlay" />
+            {incomingScene && (
+              <div
+                className="scene-layer scene-layer--incoming"
+                onAnimationEnd={handleTransitionEnd}
+              >
+                <Screen
+                  scene={incomingScene}
+                  phase="initial"
+                  onStartReading={() => setPhase('reading')}
+                  onContinueReading={() => setPhase('choices')}
+                  onSelectOption={handleSelectOption}
+                />
+              </div>
+            )}
 
-            <article className="scene-content">
-              <p className="eyebrow">METADIA · {scene.slug}</p>
-              <h1>{scene.title || scene.slug}</h1>
-
-              {scene.description && (
-                <p className="scene-description">{scene.description}</p>
-              )}
-
-              {scene.options?.options &&
-                scene.options.options.length > 0 && (
-                  <nav
-                    className="scene-options"
-                    aria-label="Történet folytatása"
-                  >
-                    {scene.options.options.map((option) => (
-                      <button
-                        className="scene-option"
-                        key={option.slug}
-                        onClick={() => setSlug(option.slug)}
-                      >
-                        <span>{option.title}</span>
-                        <span aria-hidden="true">↗</span>
-                      </button>
-                    ))}
-                  </nav>
-                )}
-
-              <p className="scene-footer">
-                JELENET · {scene.slug}
-              </p>
-            </article>
+            {transitionError && (
+              <div className="scene-transition-error" role="alert">
+                <p>{transitionError}</p>
+                <button onClick={() => setTransitionError(null)}>
+                  Bezárás
+                </button>
+              </div>
+            )}
           </>
         )}
       </section>
