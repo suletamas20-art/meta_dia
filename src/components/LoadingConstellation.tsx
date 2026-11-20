@@ -1,4 +1,3 @@
-
 import './LoadingConstellation.css'
 
 function LoadingConstellation() {
@@ -42,6 +41,6 @@ function LoadingConstellation() {
       </svg>
     </div>
   )
-
+}
 
 export default LoadingConstellation
